@@ -1,0 +1,37 @@
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  color: white;
+  background-color: #2b3d50;
+  overflow: hidden;
+}
+
+#game {
+  text-align: center;
+  padding: 20px;
+}
+
+#countdown {
+  font-size: 2em;
+  margin-bottom: 10px;
+}
+
+#stats {
+  font-size: 1.2em;
+}
+
+#actions button {
+  font-size: 1em;
+  padding: 10px 20px;
+  margin: 10px;
+  cursor: pointer;
+}
+
+#snowCanvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
