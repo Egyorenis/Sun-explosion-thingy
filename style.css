@@ -1,37 +1,31 @@
 body {
   margin: 0;
   font-family: Arial, sans-serif;
+  background-color: #1e1e1e;
   color: white;
-  background-color: #2b3d50;
   overflow: hidden;
 }
 
-#game {
-  text-align: center;
-  padding: 20px;
+#game-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
 }
 
-#countdown {
-  font-size: 2em;
-  margin-bottom: 10px;
+canvas {
+  background-color: #87ceeb; /* Sky color */
+  border: 2px solid white;
 }
 
-#stats {
-  font-size: 1.2em;
-}
-
-#actions button {
-  font-size: 1em;
-  padding: 10px 20px;
-  margin: 10px;
-  cursor: pointer;
-}
-
-#snowCanvas {
+#ui {
   position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
+  top: 10px;
+  left: 10px;
+  color: white;
+  font-size: 1.2em;
 }
