@@ -1,167 +1,129 @@
-// Canvas Setup
-const canvas = document.getElementById("gameCanvas");
-const ctx = canvas.getContext("2d");
-canvas.width = 800;
-canvas.height = 600;
+// Scene, Camera, Renderer
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x000000, 0.02); // Permanent darkness
 
-// Game Variables
-let hunger = 100;
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+const renderer = new THREE.WebGLRenderer();
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// Lighting (Dim Glow for Darkness)
+const moonLight = new THREE.DirectionalLight(0x8888ff, 0.5);
+moonLight.position.set(-10, 20, 10);
+scene.add(moonLight);
+
+const ambientLight = new THREE.AmbientLight(0x222244); // Weak ambient light
+scene.add(ambientLight);
+
+// Frozen Terrain
+const terrainSize = 100;
+const terrainGeometry = new THREE.PlaneGeometry(terrainSize, terrainSize, 100, 100);
+terrainGeometry.rotateX(-Math.PI / 2);
+
+// Add Perlin Noise for Snowy Terrain
+terrainGeometry.vertices.forEach((v) => {
+  v.y = Math.sin(v.x / 5) + Math.sin(v.z / 5) + (Math.random() * 0.5);
+});
+
+const terrainMaterial = new THREE.MeshLambertMaterial({ color: 0xeeeeee, wireframe: false });
+const terrain = new THREE.Mesh(terrainGeometry, terrainMaterial);
+scene.add(terrain);
+
+// Frozen Water
+const waterGeometry = new THREE.PlaneGeometry(30, 30, 10, 10);
+const waterMaterial = new THREE.MeshPhongMaterial({
+  color: 0x1e90ff,
+  opacity: 0.6,
+  transparent: true,
+});
+const frozenLake = new THREE.Mesh(waterGeometry, waterMaterial);
+frozenLake.position.y = 0.1;
+frozenLake.rotation.x = -Math.PI / 2;
+frozenLake.position.set(10, 0, -10);
+scene.add(frozenLake);
+
+// Snow-Covered Trees
+function createTree(x, z) {
+  const trunkGeometry = new THREE.CylinderGeometry(0.2, 0.3, 2);
+  const trunkMaterial = new THREE.MeshLambertMaterial({ color: 0x8b4513 });
+  const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+  trunk.position.set(x, 1, z);
+
+  const leavesGeometry = new THREE.ConeGeometry(1, 3, 8);
+  const leavesMaterial = new THREE.MeshLambertMaterial({ color: 0x228b22 });
+  const leaves = new THREE.Mesh(leavesGeometry, leavesMaterial);
+  leaves.position.set(x, 3, z);
+
+  scene.add(trunk);
+  scene.add(leaves);
+}
+
+for (let i = 0; i < 30; i++) {
+  createTree((Math.random() - 0.5) * terrainSize, (Math.random() - 0.5) * terrainSize);
+}
+
+// Player Setup
+const player = { x: 0, z: 0, speed: 0.2 };
+const keys = {};
+document.addEventListener("keydown", (e) => (keys[e.key] = true));
+document.addEventListener("keyup", (e) => (keys[e.key] = false));
+
+// Warmth and Hunger
 let warmth = 100;
-let timeLeft = 480; // 8 minutes in seconds
-let player = { x: 400, y: 300, size: 20, color: "blue", speed: 5 };
-let snowflakes = [];
-let animals = [{ x: 200, y: 400, size: 15 }];
-let lakes = [{ x: 600, y: 350, width: 50, height: 30 }];
+let hunger = 100;
 
-// Timer
-const timerElement = document.getElementById("timer");
-const hungerElement = document.getElementById("hunger");
-const warmthElement = document.getElementById("warmth");
+function updateStats() {
+  warmth -= 0.01; // Gradual loss
+  hunger -= 0.02; // Gradual hunger
 
-// Keyboard Input
-let keys = {};
-window.addEventListener("keydown", (e) => (keys[e.key] = true));
-window.addEventListener("keyup", (e) => (keys[e.key] = false));
+  document.getElementById("warmth").textContent = Math.floor(warmth);
+  document.getElementById("hunger").textContent = Math.floor(hunger);
 
-// Game Over
-function gameOver(message) {
-  ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = "white";
-  ctx.font = "30px Arial";
-  ctx.textAlign = "center";
-  ctx.fillText(message, canvas.width / 2, canvas.height / 2);
-  clearInterval(timerInterval);
-  cancelAnimationFrame(animationId);
-}
-
-// Timer Countdown
-const timerInterval = setInterval(() => {
-  if (timeLeft > 0) {
-    timeLeft--;
-    const minutes = String(Math.floor(timeLeft / 60)).padStart(2, "0");
-    const seconds = String(timeLeft % 60).padStart(2, "0");
-    timerElement.textContent = `${minutes}:${seconds}`;
-  } else {
-    gameOver("The Sun Exploded! You perished in the eternal snow...");
-  }
-}, 1000);
-
-// Snowfall Effect
-function createSnowflakes() {
-  for (let i = 0; i < 100; i++) {
-    snowflakes.push({
-      x: Math.random() * canvas.width,
-      y: Math.random() * canvas.height,
-      radius: Math.random() * 4 + 1,
-      speed: Math.random() * 1 + 0.5,
-    });
+  if (warmth <= 0 || hunger <= 0) {
+    alert("You froze or starved to death in the eternal night.");
+    window.location.reload();
   }
 }
 
-function drawSnowflakes() {
-  snowflakes.forEach((snowflake) => {
-    ctx.beginPath();
-    ctx.arc(snowflake.x, snowflake.y, snowflake.radius, 0, Math.PI * 2);
-    ctx.fillStyle = "white";
-    ctx.fill();
-  });
+// Player Movement
+function movePlayer() {
+  if (keys["w"] || keys["ArrowUp"]) player.z -= player.speed;
+  if (keys["s"] || keys["ArrowDown"]) player.z += player.speed;
+  if (keys["a"] || keys["ArrowLeft"]) player.x -= player.speed;
+  if (keys["d"] || keys["ArrowRight"]) player.x += player.speed;
+
+  camera.position.set(player.x, 5, player.z + 10);
+  camera.lookAt(player.x, 0, player.z);
 }
 
-function moveSnowflakes() {
-  snowflakes.forEach((snowflake) => {
-    snowflake.y += snowflake.speed;
-    if (snowflake.y > canvas.height) {
-      snowflake.y = 0;
-      snowflake.x = Math.random() * canvas.width;
-    }
-  });
+// Blizzards
+let blizzardActive = false;
+
+function triggerBlizzard() {
+  blizzardActive = true;
+  scene.fog.density = 0.05; // Increase fog for blizzard
+  setTimeout(() => {
+    blizzardActive = false;
+    scene.fog.density = 0.02; // Reset fog
+  }, 10000);
 }
 
-// Draw Player
-function drawPlayer() {
-  ctx.fillStyle = player.color;
-  ctx.fillRect(player.x, player.y, player.size, player.size);
+// Randomly trigger blizzards every 30-60 seconds
+setInterval(() => {
+  if (!blizzardActive) triggerBlizzard();
+}, Math.random() * 30000 + 30000);
+
+// Animation Loop
+function animate() {
+  movePlayer();
+  updateStats();
+  renderer.render(scene, camera);
+  requestAnimationFrame(animate);
 }
 
-// Draw Animals and Lakes
-function drawObjects() {
-  animals.forEach((animal) => {
-    ctx.fillStyle = "brown";
-    ctx.fillRect(animal.x, animal.y, animal.size, animal.size);
-  });
-  lakes.forEach((lake) => {
-    ctx.fillStyle = "blue";
-    ctx.fillRect(lake.x, lake.y, lake.width, lake.height);
-  });
-}
-
-// Update Player Position
-function updatePlayer() {
-  if (keys["ArrowUp"] || keys["w"]) player.y -= player.speed;
-  if (keys["ArrowDown"] || keys["s"]) player.y += player.speed;
-  if (keys["ArrowLeft"] || keys["a"]) player.x -= player.speed;
-  if (keys["ArrowRight"] || keys["d"]) player.x += player.speed;
-
-  // Boundary Checks
-  player.x = Math.max(0, Math.min(player.x, canvas.width - player.size));
-  player.y = Math.max(0, Math.min(player.y, canvas.height - player.size));
-}
-
-// Player Actions
-function hunt() {
-  animals = animals.filter(
-    (animal) =>
-      !(
-        player.x < animal.x + animal.size &&
-        player.x + player.size > animal.x &&
-        player.y < animal.y + animal.size &&
-        player.y + player.size > animal.y
-      )
-  );
-  hunger = Math.min(hunger + 20, 100);
-}
-
-function fish() {
-  if (
-    lakes.some(
-      (lake) =>
-        player.x < lake.x + lake.width &&
-        player.x + player.size > lake.x &&
-        player.y < lake.y + lake.height &&
-        player.y + player.size > lake.y
-    )
-  ) {
-    hunger = Math.min(hunger + 15, 100);
-  }
-}
-
-// Update Game
-function updateGame() {
-  hunger = Math.max(hunger - 0.1, 0);
-  warmth = Math.max(warmth - 0.05, 0);
-  hungerElement.textContent = Math.floor(hunger);
-  warmthElement.textContent = Math.floor(warmth);
-
-  if (hunger <= 0 || warmth <= 0) {
-    gameOver("You died! The snow consumed you...");
-  }
-}
-
-// Game Loop
-function gameLoop() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  drawSnowflakes();
-  moveSnowflakes();
-  drawObjects();
-  drawPlayer();
-  updatePlayer();
-  updateGame();
-
-  animationId = requestAnimationFrame(gameLoop);
-}
+// Initialize Camera
+camera.position.set(0, 5, 10);
+camera.lookAt(0, 0, 0);
 
 // Start Game
-createSnowflakes();
-let animationId = requestAnimationFrame(gameLoop);
+animate();
