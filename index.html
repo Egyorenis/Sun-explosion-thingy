@@ -3,22 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Snow Survival</title>
+  <title>2D Snow Survival</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div id="game">
-    <div id="countdown">Sun explodes in: <span id="timer">08:00</span></div>
-    <div id="stats">
-      <p>Hunger: <span id="hunger">100</span></p>
-      <p>Warmth: <span id="warmth">100</span></p>
+  <div id="game-container">
+    <canvas id="gameCanvas"></canvas>
+    <div id="ui">
+      <div id="countdown">Sun explodes in: <span id="timer">08:00</span></div>
+      <div id="stats">
+        Hunger: <span id="hunger">100</span> | Warmth: <span id="warmth">100</span>
+      </div>
     </div>
-    <div id="actions">
-      <button onclick="hunt()">Hunt</button>
-      <button onclick="fish()">Fish</button>
-      <button onclick="gatherWood()">Gather Wood</button>
-    </div>
-    <canvas id="snowCanvas"></canvas>
   </div>
   <script src="script.js"></script>
 </body>
