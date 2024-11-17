@@ -3,173 +3,126 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3D Player with Sounds</title>
+    <title>3D First-Person Game</title>
     <style>
         body {
             margin: 0;
             overflow: hidden;
-            font-family: Arial, sans-serif;
         }
-
         canvas {
             display: block;
-        }
-
-        #instructions {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            text-align: center;
-            color: white;
-            background: rgba(0, 0, 0, 0.8);
-            padding: 20px;
-            border-radius: 8px;
-        }
-
-        #instructions.hidden {
-            display: none;
         }
     </style>
 </head>
 <body>
-    <div id="instructions">Click to lock your mouse and start playing!</div>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r152/three.min.js"></script>
-    <script>
-        let camera, scene, renderer;
-        let controlsEnabled = false;
-        let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
-        let velocity = new THREE.Vector3();
-        let direction = new THREE.Vector3();
-        const objects = [];
-        const floorSounds = {
-            concrete: new Audio('https://freesound.org/data/previews/202/202316_292026-lq.mp3'), // Concrete
-            wood: new Audio('https://freesound.org/data/previews/160/160150_1504791-lq.mp3'), // Wood
-            metal: new Audio('https://freesound.org/data/previews/368/368001_7503783-lq.mp3')  // Metal
-        };
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/146/three.min.js"></script>
+<script>
+    // Basic setup
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
 
-        for (let key in floorSounds) {
-            floorSounds[key].volume = 0.5;
+    // Player setup
+    const player = { velocity: new THREE.Vector3(), speed: 5, height: 1.8, grounded: false };
+    const controls = { forward: false, backward: false, left: false, right: false, jump: false };
+
+    // Procedural building generation
+    const materials = {
+        wood: new THREE.MeshPhongMaterial({ color: 0x8B4513 }),
+        tile: new THREE.MeshPhongMaterial({ color: 0xAAAAAA }),
+        carpet: new THREE.MeshPhongMaterial({ color: 0xFF0000 })
+    };
+
+    const sounds = {
+        wood: new Audio('wood-step.mp3'),
+        tile: new Audio('tile-step.mp3'),
+        carpet: new Audio('carpet-step.mp3')
+    };
+
+    function createRoom(width, height, depth, material, x, z) {
+        const geometry = new THREE.BoxGeometry(width, height, depth);
+        const room = new THREE.Mesh(geometry, material);
+        room.position.set(x, height / 2, z);
+        room.receiveShadow = true;
+        return room;
+    }
+
+    const building = new THREE.Group();
+    building.add(createRoom(10, 0.1, 10, materials.wood, 0, 0)); // Box room
+    building.add(createRoom(20, 0.1, 5, materials.tile, 15, 0)); // Hallway
+    building.add(createRoom(15, 0.1, 20, materials.carpet, 30, 0)); // Rectangle room
+    scene.add(building);
+
+    // Lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    scene.add(ambientLight);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+    directionalLight.position.set(10, 10, 10);
+    scene.add(directionalLight);
+
+    // Movement and collision detection
+    function checkFloor() {
+        const raycaster = new THREE.Raycaster(
+            new THREE.Vector3(camera.position.x, camera.position.y, camera.position.z),
+            new THREE.Vector3(0, -1, 0),
+            0,
+            player.height + 0.1
+        );
+        const intersections = raycaster.intersectObjects(building.children);
+        if (intersections.length > 0) {
+            player.grounded = true;
+            const material = intersections[0].object.material;
+            if (material === materials.wood) sounds.wood.play();
+            if (material === materials.tile) sounds.tile.play();
+            if (material === materials.carpet) sounds.carpet.play();
+        } else {
+            player.grounded = false;
         }
+    }
 
-        function playSound(material) {
-            if (floorSounds[material]) {
-                floorSounds[material].currentTime = 0;
-                floorSounds[material].play();
-            }
-        }
+    // Mouse and keyboard controls
+    document.addEventListener('keydown', (event) => {
+        if (event.code === 'KeyW') controls.forward = true;
+        if (event.code === 'KeyS') controls.backward = true;
+        if (event.code === 'KeyA') controls.left = true;
+        if (event.code === 'KeyD') controls.right = true;
+        if (event.code === 'Space' && player.grounded) player.velocity.y = 5;
+    });
 
-        init();
-        animate();
+    document.addEventListener('keyup', (event) => {
+        if (event.code === 'KeyW') controls.forward = false;
+        if (event.code === 'KeyS') controls.backward = false;
+        if (event.code === 'KeyA') controls.left = false;
+        if (event.code === 'KeyD') controls.right = false;
+    });
 
-        function init() {
-            // Setup scene
-            scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x202020);
-            scene.fog = new THREE.Fog(0x202020, 100, 600);
+    document.addEventListener('click', () => {
+        document.body.requestPointerLock();
+    });
 
-            // Camera
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    // Game loop
+    function animate() {
+        requestAnimationFrame(animate);
 
-            // Renderer
-            renderer = new THREE.WebGLRenderer();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            document.body.appendChild(renderer.domElement);
+        // Movement logic
+        const delta = 0.016; // Approximate frame time
+        player.velocity.y -= 9.8 * delta; // Gravity
+        if (controls.forward) camera.translateZ(-player.speed * delta);
+        if (controls.backward) camera.translateZ(player.speed * delta);
+        if (controls.left) camera.translateX(-player.speed * delta);
+        if (controls.right) camera.translateX(player.speed * delta);
+        if (player.grounded) player.velocity.y = 0;
 
-            // Lighting
-            const light = new THREE.HemisphereLight(0xffffff, 0x444444);
-            light.position.set(0, 200, 0);
-            scene.add(light);
+        camera.position.y = player.height; // Maintain height
+        camera.position.y += player.velocity.y * delta; // Apply velocity
+        checkFloor(); // Floor collision detection
 
-            // Ground materials
-            const materials = ["concrete", "wood", "metal"];
-            materials.forEach((material, i) => {
-                const geometry = new THREE.PlaneGeometry(20, 20);
-                const plane = new THREE.Mesh(
-                    geometry,
-                    new THREE.MeshStandardMaterial({ color: material === 'wood' ? 0x8b4513 : (material === 'metal' ? 0xaaaaaa : 0x777777) })
-                );
-                plane.rotation.x = -Math.PI / 2;
-                plane.position.set(i * 22 - 22, 0, 0);
-                plane.userData.material = material;
-                scene.add(plane);
-                objects.push(plane);
-            });
+        renderer.render(scene, camera);
+    }
 
-            // Player controls
-            document.body.addEventListener('click', () => {
-                document.body.requestPointerLock();
-            });
-
-            document.addEventListener('pointerlockchange', () => {
-                controlsEnabled = document.pointerLockElement === document.body;
-                document.getElementById('instructions').classList.toggle('hidden', controlsEnabled);
-            });
-
-            const onKeyDown = (event) => {
-                switch (event.code) {
-                    case 'ArrowUp':
-                    case 'KeyW': moveForward = true; break;
-                    case 'ArrowLeft':
-                    case 'KeyA': moveLeft = true; break;
-                    case 'ArrowDown':
-                    case 'KeyS': moveBackward = true; break;
-                    case 'ArrowRight':
-                    case 'KeyD': moveRight = true; break;
-                }
-            };
-
-            const onKeyUp = (event) => {
-                switch (event.code) {
-                    case 'ArrowUp':
-                    case 'KeyW': moveForward = false; break;
-                    case 'ArrowLeft':
-                    case 'KeyA': moveLeft = false; break;
-                    case 'ArrowDown':
-                    case 'KeyS': moveBackward = false; break;
-                    case 'ArrowRight':
-                    case 'KeyD': moveRight = false; break;
-                }
-            };
-
-            document.addEventListener('keydown', onKeyDown);
-            document.addEventListener('keyup', onKeyUp);
-
-            // Raycaster
-            const raycaster = new THREE.Raycaster();
-
-            function updatePhysics(delta) {
-                velocity.x -= velocity.x * 10.0 * delta;
-                velocity.z -= velocity.z * 10.0 * delta;
-
-                direction.z = Number(moveForward) - Number(moveBackward);
-                direction.x = Number(moveRight) - Number(moveLeft);
-                direction.normalize();
-
-                if (moveForward || moveBackward) velocity.z -= direction.z * 400.0 * delta;
-                if (moveLeft || moveRight) velocity.x -= direction.x * 400.0 * delta;
-
-                camera.position.addScaledVector(velocity, delta);
-
-                // Check collision with floor
-                raycaster.set(camera.position, new THREE.Vector3(0, -1, 0));
-                const intersects = raycaster.intersectObjects(objects);
-
-                if (intersects.length > 0) {
-                    const floorMaterial = intersects[0].object.userData.material;
-                    playSound(floorMaterial);
-                }
-            }
-        }
-
-        function animate() {
-            requestAnimationFrame(animate);
-
-            const delta = 0.1;
-            if (controlsEnabled) updatePhysics(delta);
-
-            renderer.render(scene, camera);
-        }
-    </script>
+    animate();
+</script>
 </body>
 </html>
