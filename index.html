@@ -42,21 +42,21 @@
     </div>
 
     <script>
+        // --- Initialization ---
         const canvas = document.getElementById('gameCanvas');
         const renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
-        renderer.shadowMap.enabled = true; // Enable shadows for realism
-        renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Use soft shadows
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        camera.position.set(0, 5, 15); // Initial camera position
+        camera.position.set(0, 5, 15);
         camera.lookAt(0, 0, 0);
 
-        // Set a cartoony blue skybox
         scene.background = new THREE.Color(0x87CEEB); // Sky Blue
 
-        // Basic lighting
-        const ambientLight = new THREE.HemisphereLight(0xffffff, 0x404040, 0.7); // Sky color, ground color, intensity
+        // --- Lighting ---
+        const ambientLight = new THREE.HemisphereLight(0xffffff, 0x404040, 0.7);
         scene.add(ambientLight);
 
         const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -68,27 +68,20 @@
         directionalLight.shadow.camera.far = 50;
         scene.add(directionalLight);
 
-
-        // Physics world setup using Cannon.js
+        // --- Physics World ---
         const world = new CANNON.World();
-        world.gravity.set(0, -9.82, 0); // Realistic gravity
-        world.broadphase = new CANNON.NaiveBroadphase(); // Broadphase algorithm
-        world.solver.iterations = 10; // Solver iterations for accuracy
+        world.gravity.set(0, -9.82, 0);
+        world.broadphase = new CANNON.NaiveBroadphase();
+        world.solver.iterations = 10;
 
-        // Car properties (cartoony settings)
+        // --- Car Properties ---
         const carProperties = {
-            mass: 800, // Lighter car
-            width: 2,
-            height: 1.5,
-            length: 4,
-            wheelRadius: 0.5,
-            wheelWidth: 0.3,
-            maxSpeed: 40, // Cartoony speed
-            maxReverseSpeed: -10,
-            acceleration: 15, // Cartoony acceleration
-            brakingForce: 100, // Stronger brakes
-            steeringSensitivity: 0.04, // Slightly less sensitive steering
-            maxSteeringAngle: 0.5, // Maximum steering angle
+            mass: 800, width: 2, height: 1.5, length: 4,
+            wheelRadius: 0.5, wheelWidth: 0.3,
+            maxSpeed: 40, maxReverseSpeed: -10, acceleration: 15,
+            brakingForce: 100, steeringSensitivity: 0.04, maxSteeringAngle: 0.5,
+            frictionMultiplier: 1.0, // Normal friction
+            grassFrictionMultiplier: 0.3 // Reduced friction on grass
         };
 
         let carBody;
@@ -97,129 +90,183 @@
         const wheels = [];
         let engineForce = 0;
         let steeringAngle = 0;
-        let velocity = new THREE.Vector3(); // Car velocity
+        let velocity = new THREE.Vector3();
         let isReversing = false;
+        let currentFrictionMultiplier = carProperties.frictionMultiplier; // Track current friction
 
-        // Function to create a cartoony car body
+        // --- Procedural Generation Variables ---
+        let roadSegments = []; // Store info about generated road segments
+        const roadSegmentLength = 80; // Length of each new road segment
+        const roadWidth = 20;
+        let furthestPositiveZ = 30 + roadSegmentLength / 2; // Initial positive Z extent of the main road
+        let furthestNegativeZ = 30 - roadSegmentLength / 2; // Initial negative Z extent of the main road
+        const generationThreshold = 50; // How close the car needs to be to the edge to generate more road
+
+        // --- Car Creation ---
         function createCarBody() {
             const chassisGeometry = new THREE.BoxGeometry(carProperties.width, carProperties.height, carProperties.length);
             const chassisMaterial = new THREE.MeshLambertMaterial({ color: 0x90EE90 }); // Light green
             chassisMesh = new THREE.Mesh(chassisGeometry, chassisMaterial);
             chassisMesh.castShadow = true;
             chassisMesh.receiveShadow = true;
-            chassisMesh.position.y = carProperties.height / 2;
+            chassisMesh.position.y = carProperties.height / 2; // Adjust initial mesh position if needed
 
             carBody = new CANNON.Body({ mass: carProperties.mass });
             const chassisShape = new CANNON.Box(new CANNON.Vec3(carProperties.width / 2, carProperties.height / 2, carProperties.length / 2));
-            carBody.addShape(chassisShape, new CANNON.Vec3(0, 0, 0));
-            carBody.position.set(0, carProperties.height / 2, 0);
+            carBody.addShape(chassisShape);
+            carBody.position.set(0, carProperties.height, 0); // Start slightly higher to avoid initial ground collision issues
+            carBody.angularDamping = 0.5; // Add some damping to prevent spinning out too easily
 
-            return { chassisMesh, carBody };
+            // Define a contact material between car and ground/road
+            const carMaterial = new CANNON.Material("carMaterial");
+            const groundMaterial = new CANNON.Material("groundMaterial");
+            const roadMaterial = new CANNON.Material("roadMaterial");
+
+            carBody.material = carMaterial; // Assign material to car body
+
+            const carGroundContactMaterial = new CANNON.ContactMaterial(carMaterial, groundMaterial, {
+                friction: 0.3, // Low friction for grass
+                restitution: 0.1,
+            });
+            const carRoadContactMaterial = new CANNON.ContactMaterial(carMaterial, roadMaterial, {
+                friction: 0.8, // Higher friction for road
+                restitution: 0.1,
+            });
+
+            world.addContactMaterial(carGroundContactMaterial);
+            world.addContactMaterial(carRoadContactMaterial);
+
+
+            return { chassisMesh, carBody, carMaterial, roadMaterial, groundMaterial }; // Return materials
         }
 
-        // Function to create car wheels (cartoony style)
-        function createWheels() {
+        function createWheels(carBody, carMaterial) { // Pass carBody and material
             const wheelGeometry = new THREE.CylinderGeometry(carProperties.wheelRadius, carProperties.wheelRadius, carProperties.wheelWidth, 16);
-            const wheelMaterial = new THREE.MeshLambertMaterial({ color: 0x333333 }); // Dark gray
-            const wheelPositions = [
-                [-carProperties.width / 2 - 0.1, -carProperties.height / 4, carProperties.length / 2 - 0.5],
-                [carProperties.width / 2 + 0.1, -carProperties.height / 4, carProperties.length / 2 - 0.5],
-                [-carProperties.width / 2 - 0.1, -carProperties.height / 4, -carProperties.length / 2 + 0.5],
-                [carProperties.width / 2 + 0.1, -carProperties.height / 4, -carProperties.length / 2 + 0.5],
-            ];
+            wheelGeometry.rotateZ(Math.PI / 2); // Rotate geometry so cylinder lies flat
+            const wheelMaterial3JS = new THREE.MeshLambertMaterial({ color: 0x333333 }); // Dark gray
 
-            const wheelBodies = [];
-            for (let i = 0; i < 4; i++) {
-                const wheelMesh = new THREE.Mesh(wheelGeometry, wheelMaterial);
+            // Use Cannon.js Vehicle simulation
+            const vehicle = new CANNON.RaycastVehicle({
+                chassisBody: carBody,
+                indexRightAxis: 0, // x
+                indexUpAxis: 1, // y
+                indexForwardAxis: 2 // z
+            });
+
+            const options = {
+                radius: carProperties.wheelRadius,
+                directionLocal: new CANNON.Vec3(0, -1, 0), // Down
+                suspensionStiffness: 30,
+                suspensionRestLength: 0.4, // Slightly longer suspension
+                frictionSlip: 1.5, // Adjust friction slip
+                dampingRelaxation: 2.3,
+                dampingCompression: 4.4,
+                maxSuspensionForce: 100000,
+                rollInfluence: 0.01,
+                axleLocal: new CANNON.Vec3(-1, 0, 0), // Perpendicular to direction
+                chassisConnectionPointLocal: new CANNON.Vec3(), // Set below
+                maxSuspensionTravel: 0.3,
+                customSlidingRotationalSpeed: -30,
+                useCustomSlidingRotationalSpeed: true
+            };
+
+            // Front Left Wheel
+            options.chassisConnectionPointLocal.set(carProperties.width / 2, 0, carProperties.length / 2 * 0.8); // Position slightly forward
+            vehicle.addWheel(options);
+
+            // Front Right Wheel
+            options.chassisConnectionPointLocal.set(-carProperties.width / 2, 0, carProperties.length / 2 * 0.8);
+            vehicle.addWheel(options);
+
+            // Rear Left Wheel
+            options.chassisConnectionPointLocal.set(carProperties.width / 2, 0, -carProperties.length / 2 * 0.8); // Position slightly backward
+            vehicle.addWheel(options);
+
+            // Rear Right Wheel
+            options.chassisConnectionPointLocal.set(-carProperties.width / 2, 0, -carProperties.length / 2 * 0.8);
+            vehicle.addWheel(options);
+
+            vehicle.wheelInfos.forEach(wheel => {
+                const wheelMesh = new THREE.Mesh(wheelGeometry, wheelMaterial3JS);
                 wheelMesh.castShadow = true;
                 wheelMesh.receiveShadow = true;
-                wheelMesh.rotation.x = Math.PI / 2;
+                scene.add(wheelMesh);
                 wheelMeshes.push(wheelMesh);
+            });
 
-                const wheelBody = new CANNON.Body({ mass: 0 }); // Wheels have no mass
-                const wheelShape = new CANNON.Cylinder(carProperties.wheelRadius, carProperties.wheelRadius, carProperties.wheelWidth, 16);
-                wheelBody.addShape(wheelShape, new CANNON.Vec3(0, 0, 0));
-                wheelBody.position.set(wheelPositions[i][0], wheelPositions[i][1], wheelPositions[i][2]);
-                wheelBodies.push(wheelBody);
-                wheels.push({
-                    body: wheelBody,
-                    position: new THREE.Vector3(wheelPositions[i][0], wheelPositions[i][1], wheelPositions[i][2]),
-                    steering: 0,
-                    engineForce: 0,
-                });
-            }
-            return { wheelMeshes, wheelBodies };
+            vehicle.addToWorld(world); // Add the vehicle simulation to the world
+            return vehicle;
         }
 
-        // Add the car and wheels to the scene and physics world
-        const { chassisMesh: carChassisMesh, carBody: carPhysicsBody } = createCarBody();
-        scene.add(carChassisMesh);
-        world.addBody(carPhysicsBody);
+        // --- Ground and Road Creation ---
+        function createGround(groundMaterial) { // Accept ground material
+            const groundGeometry = new THREE.PlaneGeometry(2000, 2000); // Keep it large for visual background
+            const groundMaterial3JS = new THREE.MeshLambertMaterial({ color: 0x8FBC8F }); // Grass color
+            const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial3JS);
+            groundMesh.rotation.x = -Math.PI / 2;
+            groundMesh.receiveShadow = true;
+            scene.add(groundMesh);
 
-        const { wheelMeshes: carWheelMeshes, wheelBodies: carWheelPhysicsBodies } = createWheels();
-        carWheelMeshes.forEach(wheelMesh => scene.add(wheelMesh));
-        carWheelPhysicsBodies.forEach(wheelBody => world.addBody(wheelBody));
+            const groundBody = new CANNON.Body({ mass: 0, material: groundMaterial }); // Assign material
+            const groundShape = new CANNON.Plane();
+            groundBody.addShape(groundShape);
+            groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
+            world.addBody(groundBody);
+            return groundMesh;
+        }
 
-
-        // Create a large, cartoony ground plane (grass)
-        const groundGeometry = new THREE.PlaneGeometry(2000, 2000);
-        const groundMaterial = new THREE.MeshLambertMaterial({ color: 0x8FBC8F }); // A lighter green for grass
-        const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
-        groundMesh.rotation.x = -Math.PI / 2;
-        groundMesh.receiveShadow = true;
-        scene.add(groundMesh);
-
-        const groundBody = new CANNON.Body({ mass: 0 });
-        const groundShape = new CANNON.Plane();
-        groundBody.addShape(groundShape);
-        groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
-        world.addBody(groundBody);
-
-
-        // Create some cartoony roads
-        function createRoad(x, z, width, length, isVertical) {
+        function createRoad(x, z, width, length, isVertical, roadMaterial) { // Accept road material
             const roadGeometry = new THREE.PlaneGeometry(width, length);
-            const roadMaterial = new THREE.MeshLambertMaterial({ color: 0x778899 }); // A gray color for road
-            const roadMesh = new THREE.Mesh(roadGeometry, roadMaterial);
+            const roadMaterial3JS = new THREE.MeshLambertMaterial({ color: 0x778899 }); // Road color
+            const roadMesh = new THREE.Mesh(roadGeometry, roadMaterial3JS);
             roadMesh.rotation.x = -Math.PI / 2;
-            roadMesh.position.set(x, 0.1, z); // Position slightly above the ground
+            roadMesh.position.set(x, 0.05, z); // Slightly above ground
             roadMesh.receiveShadow = true;
             scene.add(roadMesh);
 
-            const roadBody = new CANNON.Body({ mass: 0 });
-            const roadShape = new CANNON.Plane();
+            // Add a corresponding physics body for the road segment
+            const roadBody = new CANNON.Body({ mass: 0, material: roadMaterial }); // Assign material
+            const roadShape = new CANNON.Box(new CANNON.Vec3(width / 2, 0.05, length / 2)); // Thin box shape
             roadBody.addShape(roadShape);
-            roadBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
-            roadBody.position.set(x, 0, z);
+            roadBody.position.set(x, 0, z); // Position physics body at ground level
             world.addBody(roadBody);
 
-             // Add road lines
-            if(isVertical){
+            // Add road lines (visual only)
+            const lineMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            if (isVertical) {
                 const lineGeometry = new THREE.PlaneGeometry(0.2, length);
-                const lineMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
                 const line = new THREE.Mesh(lineGeometry, lineMaterial);
                 line.rotation.x = -Math.PI / 2;
-                line.position.set(x, 0.2, z);
+                line.position.set(x, 0.1, z); // Slightly above road mesh
                 scene.add(line);
-            }
-            else{
+            } else {
                 const lineGeometry = new THREE.PlaneGeometry(width, 0.2);
-                const lineMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
                 const line = new THREE.Mesh(lineGeometry, lineMaterial);
                 line.rotation.x = -Math.PI / 2;
-                line.position.set(x, 0.2, z);
+                line.position.set(x, 0.1, z);
                 scene.add(line);
             }
+
+            // Store segment info for procedural generation tracking
+            roadSegments.push({ x, z, width, length, isVertical, mesh: roadMesh, body: roadBody });
         }
 
-        // Create a few intersecting roads
-        createRoad(0, 0, 60, 20, false);
-        createRoad(0, 30, 20, 80, true);
-        createRoad(30, 60, 60, 20, false);
+        // --- Initial Scene Setup ---
+        const { chassisMesh: carChassisMesh, carBody: carPhysicsBody, carMaterial, roadMaterial, groundMaterial } = createCarBody();
+        scene.add(carChassisMesh);
+        world.addBody(carPhysicsBody);
 
+        const vehicle = createWheels(carPhysicsBody, carMaterial); // Create wheels using RaycastVehicle
 
-        // Cartoony Ragdoll creation
-        function createRagdoll(x, y, z) {
+        createGround(groundMaterial);
+
+        // Create initial roads
+        createRoad(0, 0, 60, 20, false, roadMaterial);
+        createRoad(0, 30, roadWidth, roadSegmentLength, true, roadMaterial); // Main N-S road
+        createRoad(30, 60, 60, 20, false, roadMaterial);
+
+        // --- Ragdoll Creation (Simplified - No changes needed for this update) ---
+         function createRagdoll(x, y, z) {
             const headGeometry = new THREE.SphereGeometry(0.4, 8, 8);
             const bodyGeometry = new THREE.CylinderGeometry(0.2, 0.3, 1, 8);
             const limbGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.8, 8);
@@ -228,366 +275,290 @@
 
             const skinMaterial = new THREE.MeshLambertMaterial({ color: 0xFFC300 }); // Bright yellow skin
 
-            const headMesh = new THREE.Mesh(headGeometry, skinMaterial);
-            headMesh.castShadow = true;
-            const bodyMesh = new THREE.Mesh(bodyGeometry, skinMaterial);
-            bodyMesh.castShadow = true;
-            const leftUpperArmMesh = new THREE.Mesh(limbGeometry, skinMaterial);
-            leftUpperArmMesh.castShadow = true;
-            const rightUpperArmMesh = new THREE.Mesh(limbGeometry, skinMaterial);
-            rightUpperArmMesh.castShadow = true;
-            const leftLowerArmMesh = new THREE.Mesh(limbGeometry, skinMaterial);
-            leftLowerArmMesh.castShadow = true;
-            const rightLowerArmMesh = new THREE.Mesh(limbGeometry, skinMaterial);
-            rightLowerArmMesh.castShadow = true;
-            const leftUpperLegMesh = new THREE.Mesh(limbGeometry, skinMaterial);
-            leftUpperLegMesh.castShadow = true;
-            const rightUpperLegMesh = new THREE.Mesh(limbGeometry, skinMaterial);
-            rightUpperLegMesh.castShadow = true;
-            const leftLowerLegMesh = new THREE.Mesh(limbGeometry, skinMaterial);
-            leftLowerLegMesh.castShadow = true;
-            const rightLowerLegMesh = new THREE.Mesh(limbGeometry, skinMaterial);
-            rightLowerLegMesh.castShadow = true;
-            const leftFootMesh = new THREE.Mesh(footGeometry, skinMaterial); // Left Foot
-            leftFootMesh.castShadow = true;
-            const rightFootMesh = new THREE.Mesh(footGeometry, skinMaterial); // Right Foot
-            rightFootMesh.castShadow = true;
-            const leftHandMesh = new THREE.Mesh(handGeometry, skinMaterial);
-            leftHandMesh.castShadow = true;
-            const rightHandMesh = new THREE.Mesh(handGeometry, skinMaterial);
-            rightHandMesh.castShadow = true;
+            const headMesh = new THREE.Mesh(headGeometry, skinMaterial); headMesh.castShadow = true;
+            const bodyMesh = new THREE.Mesh(bodyGeometry, skinMaterial); bodyMesh.castShadow = true;
+            const leftUpperArmMesh = new THREE.Mesh(limbGeometry, skinMaterial); leftUpperArmMesh.castShadow = true;
+            const rightUpperArmMesh = new THREE.Mesh(limbGeometry, skinMaterial); rightUpperArmMesh.castShadow = true;
+            const leftLowerArmMesh = new THREE.Mesh(limbGeometry, skinMaterial); leftLowerArmMesh.castShadow = true;
+            const rightLowerArmMesh = new THREE.Mesh(limbGeometry, skinMaterial); rightLowerArmMesh.castShadow = true;
+            const leftUpperLegMesh = new THREE.Mesh(limbGeometry, skinMaterial); leftUpperLegMesh.castShadow = true;
+            const rightUpperLegMesh = new THREE.Mesh(limbGeometry, skinMaterial); rightUpperLegMesh.castShadow = true;
+            const leftLowerLegMesh = new THREE.Mesh(limbGeometry, skinMaterial); leftLowerLegMesh.castShadow = true;
+            const rightLowerLegMesh = new THREE.Mesh(limbGeometry, skinMaterial); rightLowerLegMesh.castShadow = true;
+            const leftFootMesh = new THREE.Mesh(footGeometry, skinMaterial); leftFootMesh.castShadow = true;
+            const rightFootMesh = new THREE.Mesh(footGeometry, skinMaterial); rightFootMesh.castShadow = true;
+            const leftHandMesh = new THREE.Mesh(handGeometry, skinMaterial); leftHandMesh.castShadow = true;
+            const rightHandMesh = new THREE.Mesh(handGeometry, skinMaterial); rightHandMesh.castShadow = true;
+
+            const headBody = new CANNON.Body({ mass: 1 }); headBody.addShape(new CANNON.Sphere(0.4));
+            const bodyBody = new CANNON.Body({ mass: 3 }); bodyBody.addShape(new CANNON.Cylinder(0.2, 0.3, 1, 8)); // Adjusted shape
+            const leftUpperArmBody = new CANNON.Body({ mass: 1 }); leftUpperArmBody.addShape(new CANNON.Cylinder(0.1, 0.1, 0.8, 8));
+            const rightUpperArmBody = new CANNON.Body({ mass: 1 }); rightUpperArmBody.addShape(new CANNON.Cylinder(0.1, 0.1, 0.8, 8));
+            const leftLowerArmBody = new CANNON.Body({ mass: 1 }); leftLowerArmBody.addShape(new CANNON.Cylinder(0.1, 0.1, 0.8, 8));
+            const rightLowerArmBody = new CANNON.Body({ mass: 1 }); rightLowerArmBody.addShape(new CANNON.Cylinder(0.1, 0.1, 0.8, 8));
+            const leftUpperLegBody = new CANNON.Body({ mass: 1 }); leftUpperLegBody.addShape(new CANNON.Cylinder(0.1, 0.1, 0.8, 8));
+            const rightUpperLegBody = new CANNON.Body({ mass: 1 }); rightUpperLegBody.addShape(new CANNON.Cylinder(0.1, 0.1, 0.8, 8));
+            const leftLowerLegBody = new CANNON.Body({ mass: 1 }); leftLowerLegBody.addShape(new CANNON.Cylinder(0.1, 0.1, 0.8, 8));
+            const rightLowerLegBody = new CANNON.Body({ mass: 1 }); rightLowerLegBody.addShape(new CANNON.Cylinder(0.1, 0.1, 0.8, 8));
+            const leftFootBody = new CANNON.Body({mass: 0.5}); leftFootBody.addShape(new CANNON.Sphere(0.15));
+            const rightFootBody = new CANNON.Body({mass: 0.5}); rightFootBody.addShape(new CANNON.Sphere(0.15));
+            const leftHandBody = new CANNON.Body({mass: 0.5}); leftHandBody.addShape(new CANNON.Sphere(0.15));
+            const rightHandBody = new CANNON.Body({mass: 0.5}); rightHandBody.addShape(new CANNON.Sphere(0.15));
+
+            // Simplified initial positioning
+            const initialY = 2;
+            headBody.position.set(x, initialY + 0.8, z);
+            bodyBody.position.set(x, initialY, z);
+            leftUpperArmBody.position.set(x - 0.4, initialY + 0.4, z);
+            rightUpperArmBody.position.set(x + 0.4, initialY + 0.4, z);
+            leftLowerArmBody.position.set(x - 0.4, initialY - 0.4, z);
+            rightLowerArmBody.position.set(x + 0.4, initialY - 0.4, z);
+            leftUpperLegBody.position.set(x - 0.2, initialY - 0.8, z);
+            rightUpperLegBody.position.set(x + 0.2, initialY - 0.8, z);
+            leftLowerLegBody.position.set(x - 0.2, initialY - 1.6, z);
+            rightLowerLegBody.position.set(x + 0.2, initialY - 1.6, z);
+            leftFootBody.position.set(x - 0.2, initialY - 2.0, z);
+            rightFootBody.position.set(x + 0.2, initialY - 2.0, z);
+            leftHandBody.position.set(x - 0.4, initialY - 0.8, z);
+            rightHandBody.position.set(x + 0.4, initialY - 0.8, z);
+
+            const bodies = [headBody, bodyBody, leftUpperArmBody, rightUpperArmBody, leftLowerArmBody, rightLowerArmBody, leftUpperLegBody, rightUpperLegBody, leftLowerLegBody, rightLowerLegBody, leftFootBody, rightFootBody, leftHandBody, rightHandBody];
+            const meshes = [headMesh, bodyMesh, leftUpperArmMesh, rightUpperArmMesh, leftLowerArmMesh, rightLowerArmMesh, leftUpperLegMesh, rightUpperLegMesh, leftLowerLegMesh, rightLowerLegMesh, leftFootMesh, rightFootMesh, leftHandMesh, rightHandMesh];
+
+             // Add bodies and meshes
+            bodies.forEach(b => world.addBody(b));
+            meshes.forEach(m => scene.add(m));
+
+            // Simplified Constraints (using PointToPoint for flexibility)
+            const constraints = [];
+            const halfBodyHeight = 0.5;
+            const halfLimbHeight = 0.4;
+
+            // Head to Body
+            constraints.push(new CANNON.PointToPointConstraint(headBody, new CANNON.Vec3(0, -0.4, 0), bodyBody, new CANNON.Vec3(0, halfBodyHeight, 0)));
+            // Arms to Body
+            constraints.push(new CANNON.PointToPointConstraint(bodyBody, new CANNON.Vec3(-0.3, halfBodyHeight * 0.8, 0), leftUpperArmBody, new CANNON.Vec3(0, halfLimbHeight, 0)));
+            constraints.push(new CANNON.PointToPointConstraint(bodyBody, new CANNON.Vec3(0.3, halfBodyHeight * 0.8, 0), rightUpperArmBody, new CANNON.Vec3(0, halfLimbHeight, 0)));
+            // Lower Arms to Upper Arms
+            constraints.push(new CANNON.PointToPointConstraint(leftUpperArmBody, new CANNON.Vec3(0, -halfLimbHeight, 0), leftLowerArmBody, new CANNON.Vec3(0, halfLimbHeight, 0)));
+            constraints.push(new CANNON.PointToPointConstraint(rightUpperArmBody, new CANNON.Vec3(0, -halfLimbHeight, 0), rightLowerArmBody, new CANNON.Vec3(0, halfLimbHeight, 0)));
+            // Hands to Lower Arms
+            constraints.push(new CANNON.PointToPointConstraint(leftLowerArmBody, new CANNON.Vec3(0, -halfLimbHeight, 0), leftHandBody, new CANNON.Vec3(0, 0.15, 0)));
+            constraints.push(new CANNON.PointToPointConstraint(rightLowerArmBody, new CANNON.Vec3(0, -halfLimbHeight, 0), rightHandBody, new CANNON.Vec3(0, 0.15, 0)));
+             // Legs to Body
+            constraints.push(new CANNON.PointToPointConstraint(bodyBody, new CANNON.Vec3(-0.15, -halfBodyHeight, 0), leftUpperLegBody, new CANNON.Vec3(0, halfLimbHeight, 0)));
+            constraints.push(new CANNON.PointToPointConstraint(bodyBody, new CANNON.Vec3(0.15, -halfBodyHeight, 0), rightUpperLegBody, new CANNON.Vec3(0, halfLimbHeight, 0)));
+            // Lower Legs to Upper Legs
+            constraints.push(new CANNON.PointToPointConstraint(leftUpperLegBody, new CANNON.Vec3(0, -halfLimbHeight, 0), leftLowerLegBody, new CANNON.Vec3(0, halfLimbHeight, 0)));
+            constraints.push(new CANNON.PointToPointConstraint(rightUpperLegBody, new CANNON.Vec3(0, -halfLimbHeight, 0), rightLowerLegBody, new CANNON.Vec3(0, halfLimbHeight, 0)));
+             // Feet to Lower Legs
+            constraints.push(new CANNON.PointToPointConstraint(leftLowerLegBody, new CANNON.Vec3(0, -halfLimbHeight, 0), leftFootBody, new CANNON.Vec3(0, 0.15, 0)));
+            constraints.push(new CANNON.PointToPointConstraint(rightLowerLegBody, new CANNON.Vec3(0, -halfLimbHeight, 0), rightFootBody, new CANNON.Vec3(0, 0.15, 0)));
 
 
-            const headBody = new CANNON.Body({ mass: 5 });
-            const bodyBody = new CANNON.Body({ mass: 10 });
-            const leftUpperArmBody = new CANNON.Body({ mass: 3 });
-            const rightUpperArmBody = new CANNON.Body({ mass: 3 });
-            const leftLowerArmBody = new CANNON.Body({ mass: 2 });
-            const rightLowerArmBody = new CANNON.Body({ mass: 2 });
-            const leftUpperLegBody = new CANNON.Body({ mass: 5 });
-            const rightUpperLegBody = new CANNON.Body({ mass: 5 });
-            const leftLowerLegBody = new CANNON.Body({ mass: 4 });
-            const rightLowerLegBody = new CANNON.Body({ mass: 4 });
-            const leftFootBody = new CANNON.Body({mass: 1}); //foot
-            const rightFootBody = new CANNON.Body({mass: 1});
-            const leftHandBody = new CANNON.Body({mass: 1});
-            const rightHandBody = new CANNON.Body({mass: 1});
+            constraints.forEach(c => world.addConstraint(c));
 
+            // Store references for collision handling and updates
+            const parts = bodies.map((body, index) => ({ body, mesh: meshes[index] }));
 
-            const headShape = new CANNON.Sphere(0.4);
-            const bodyShape = new CANNON.Cylinder(0.3, 0.2, 1, 8);
-            const limbShape = new CANNON.Cylinder(0.1, 0.1, 0.8, 8);
-            const footShape = new CANNON.Sphere(0.15);
-            const handShape = new CANNON.Sphere(0.15);
-
-            headBody.addShape(headShape);
-            bodyBody.addShape(bodyShape);
-            leftUpperArmBody.addShape(limbShape);
-            rightUpperArmBody.addShape(limbShape);
-            leftLowerArmBody.addShape(limbShape);
-            rightLowerArmBody.addShape(limbShape);
-            leftUpperLegBody.addShape(limbShape);
-            rightUpperLegBody.addShape(limbShape);
-            leftLowerLegBody.addShape(limbShape);
-            rightLowerLegBody.addShape(limbShape);
-            leftFootBody.addShape(footShape);
-            rightFootBody.addShape(footShape);
-            leftHandBody.addShape(handShape);
-            rightHandBody.addShape(handShape);
-
-
-            headBody.position.set(x, y + 1.5, z);
-            bodyBody.position.set(x, y + 0.5, z);
-            leftUpperArmBody.position.set(x - 0.5, y + 1, z);
-            rightUpperArmBody.position.set(x + 0.5, y + 1, z);
-            leftLowerArmBody.position.set(x - 0.5, y, z);
-            rightLowerArmBody.position.set(x + 0.5, y, z);
-            leftUpperLegBody.position.set(x - 0.3, y - 0.5, z);
-            rightUpperLegBody.position.set(x + 0.3, y - 0.5, z);
-            leftLowerLegBody.position.set(x - 0.3, y - 1.3, z);
-            rightLowerLegBody.position.set(x + 0.3, y - 1.3, z);
-            leftFootBody.position.set(x - 0.3, y - 1.7, z);
-            rightFootBody.position.set(x + 0.3, y - 1.7, z);
-            leftHandBody.position.set(x - 0.8, y + 0.2, z);
-            rightHandBody.position.set(x + 0.8, y + 0.2, z);
-
-
-            const headJoint = new CANNON.LockConstraint(headBody, bodyBody, {
-                pivotPoint: new CANNON.Vec3(0, -0.5, 0),
-            });
-            const leftUpperArmJoint = new CANNON.HingeConstraint(bodyBody, leftUpperArmBody, {
-                pivotPoint: new CANNON.Vec3(-0.3, 0.5, 0),
-                axis: new CANNON.Vec3(0, 1, 0),
-            });
-            const rightUpperArmJoint = new CANNON.HingeConstraint(bodyBody, rightUpperArmBody, {
-                pivotPoint: new CANNON.Vec3(0.3, 0.5, 0),
-                axis: new CANNON.Vec3(0, 1, 0),
-            });
-            const leftLowerArmJoint = new CANNON.HingeConstraint(leftUpperArmBody, leftLowerArmBody, {
-                pivotPoint: new CANNON.Vec3(0, -0.4, 0),
-                axis: new CANNON.Vec3(0, 1, 0),
-            });
-            const rightLowerArmJoint = new CANNON.HingeConstraint(rightUpperArmBody, rightLowerArmBody, {
-                pivotPoint: new CANNON.Vec3(0, -0.4, 0),
-                axis: new CANNON.Vec3(0, 1, 0),
-            });
-            const leftUpperLegJoint = new CANNON.HingeConstraint(bodyBody, leftUpperLegBody, {
-                pivotPoint: new CANNON.Vec3(-0.15, -0.5, 0),
-                axis: new CANNON.Vec3(0, 1, 0),
-            });
-            const rightUpperLegJoint = new CANNON.HingeConstraint(bodyBody, rightUpperLegBody, {
-                pivotPoint: new CANNON.Vec3(0.15, -0.5, 0),
-                axis: new CANNON.Vec3(0, 1, 0),
-            });
-            const leftLowerLegJoint = new CANNON.HingeConstraint(leftUpperLegBody, leftLowerLegBody, {
-                pivotPoint: new CANNON.Vec3(0, -0.4, 0),
-                axis: new CANNON.Vec3(0, 1, 0),
-            });
-            const rightLowerLegJoint = new CANNON.HingeConstraint(rightUpperLegBody, rightLowerLegBody, {
-                pivotPoint: new CANNON.Vec3(0, -0.4, 0),
-                axis: new CANNON.Vec3(0, 1, 0),
-            });
-            const leftFootJoint = new CANNON.LockConstraint(leftLowerLegBody, leftFootBody, { //foot
-                pivotPoint: new CANNON.Vec3(0, -0.4, 0),
-            });
-            const rightFootJoint = new CANNON.LockConstraint(rightLowerLegBody, rightFootBody, {
-                pivotPoint: new CANNON.Vec3(0, -0.4, 0),
-            });
-            const leftHandJoint = new CANNON.LockConstraint(leftLowerArmBody, leftHandBody, {
-                pivotPoint: new CANNON.Vec3(0, -0.4, 0),
-            });
-            const rightHandJoint = new CANNON.LockConstraint(rightLowerArmBody, rightHandBody, {
-                pivotPoint: new CANNON.Vec3(0, -0.4, 0),
+            // Add collision listener to each part
+            parts.forEach(part => {
+                 part.body.addEventListener('collide', (event) => handleRagdollCollision(event, parts));
             });
 
 
-            world.addBody(headBody);
-            world.addBody(bodyBody);
-            world.addBody(leftUpperArmBody);
-            world.addBody(rightUpperArmBody);
-            world.addBody(leftLowerArmBody);
-            world.addBody(rightLowerArmBody);
-            world.addBody(leftUpperLegBody);
-            world.addBody(rightUpperLegBody);
-            world.addBody(leftLowerLegBody);
-            world.addBody(rightLowerLegBody);
-            world.addBody(leftFootBody);
-            world.addBody(rightFootBody);
-            world.addBody(leftHandBody);
-            world.addBody(rightHandBody);
-
-
-            world.addConstraint(headJoint);
-            world.addConstraint(leftUpperArmJoint);
-            world.addConstraint(rightUpperArmJoint);
-            world.addConstraint(leftLowerArmJoint);
-            world.addConstraint(rightLowerArmJoint);
-            world.addConstraint(leftUpperLegJoint);
-            world.addConstraint(rightUpperLegJoint);
-            world.addConstraint(leftLowerLegJoint);
-            world.addConstraint(rightLowerLegJoint);
-            world.addConstraint(leftFootJoint);
-            world.addConstraint(rightFootJoint);
-            world.addConstraint(leftHandJoint);
-            world.addConstraint(rightHandJoint);
-
-
-            scene.add(headMesh);
-            scene.add(bodyMesh);
-            scene.add(leftUpperArmMesh);
-            scene.add(rightUpperArmMesh);
-            scene.add(leftLowerArmMesh);
-            scene.add(rightLowerArmMesh);
-            scene.add(leftUpperLegMesh);
-            scene.add(rightUpperLegMesh);
-            scene.add(leftLowerLegMesh);
-            scene.add(rightLowerLegMesh);
-            scene.add(leftFootMesh);
-            scene.add(rightFootMesh);
-            scene.add(leftHandMesh);
-            scene.add(rightHandMesh);
-
-
-            return {
-                head: { body: headBody, mesh: headMesh },
-                body: { body: bodyBody, mesh: bodyMesh },
-                leftUpperArm: { body: leftUpperArmBody, mesh: leftUpperArmMesh },
-                rightUpperArm: { body: rightUpperArmBody, mesh: rightUpperArmMesh },
-                leftLowerArm: { body: leftLowerArmBody, mesh: leftLowerArmMesh },
-                rightLowerArm: { body: rightLowerArmBody, mesh: rightLowerArmMesh },
-                leftUpperLeg: { body: leftUpperLegBody, mesh: leftUpperLegMesh },
-                rightUpperLeg: { body: rightUpperLegBody, mesh: rightUpperLegMesh },
-                leftLowerLeg: { body: leftLowerLegBody, mesh: leftLowerLegMesh },
-                rightLowerLeg: { body: rightLowerLegBody, mesh: rightLowerLegMesh },
-                leftFoot: {body: leftFootBody, mesh: leftFootMesh},
-                rightFoot: {body: rightFootBody, mesh: rightFootMesh},
-                leftHand: {body: leftHandBody, mesh: leftHandMesh},
-                rightHand: {body: rightHandBody, mesh: rightHandMesh},
-                parts: [
-                    { body: headBody, mesh: headMesh },
-                    { body: bodyBody, mesh: bodyMesh },
-                    { body: leftUpperArmBody, mesh: leftUpperArmMesh },
-                    { body: rightUpperArmBody, mesh: rightUpperArmMesh },
-                    { body: leftLowerArmBody, mesh: leftLowerArmMesh },
-                    { body: rightLowerArmBody, mesh: rightLowerArmMesh },
-                    { body: leftUpperLegBody, mesh: leftUpperLegMesh },
-                    { body: rightUpperLegBody,mesh: rightUpperLegMesh },
-                    { body: leftLowerLegBody, mesh: leftLowerLegMesh },
-                    { body: rightLowerLegBody, mesh: rightLowerLegMesh },
-                    {body: leftFootBody, mesh: leftFootMesh},
-                    {body: rightFootBody, mesh: rightFootMesh},
-                    {body: leftHandBody, mesh: leftHandMesh},
-                    {body: rightHandBody, mesh: rightHandMesh}
-                ],
-            };
+            return { parts, bodies, meshes, constraints }; // Return all components
         }
 
         const ragdolls = [];
-        const numRagdolls = 10; // Create more ragdolls
+        const numRagdolls = 10;
         for (let i = 0; i < numRagdolls; i++) {
-            const x = Math.random() * 80 - 40;
-            const z = Math.random() * 80 - 40;
-            const ragdoll = createRagdoll(x, 2, z);
-            ragdolls.push(ragdoll);
+            const x = Math.random() * 60 - 30; // Place closer to initial roads
+            const z = Math.random() * 100 - 50;
+            ragdolls.push(createRagdoll(x, 2, z));
         }
 
 
-        // Collision detection
-        function handleCollision(event) {
-            const relativeVelocity = event.contact.getImpactVelocityAlongNormal();
-             // Only activate ragdoll if impact is significant enough
-            if (relativeVelocity > 5) {
-                const collidedBody = event.body;
-                for (const ragdoll of ragdolls) {
-                    ragdoll.parts.forEach(part => {
-                        if (part.body === collidedBody) {
-                            // Apply a strong impulse to the ragdoll part
-                            const impulse = new CANNON.Vec3();
-                            event.contact.getWorldPoint(impulse);
-                            part.body.applyImpulse(new CANNON.Vec3(0, 5, 0), impulse);
-                            part.body.mass = 1; // Make the body dynamic
-                        }
-                    });
-                }
-            }
-        }
-        carBody.addEventListener('collision', handleCollision);
+        // --- Collision Handling ---
+        function handleRagdollCollision(event, ragdollParts) {
+             // Check if the collision involves the car chassis
+             const otherBody = event.body === carPhysicsBody ? event.target : event.body;
+             const collidedPartBody = event.body === carPhysicsBody ? event.target : event.body; // The ragdoll part body
+
+             // Find which ragdoll this part belongs to
+             let targetRagdoll = null;
+             for(const ragdoll of ragdolls) {
+                 if (ragdoll.parts.some(p => p.body === collidedPartBody)) {
+                     targetRagdoll = ragdoll;
+                     break;
+                 }
+             }
+             if (!targetRagdoll) return; // Should not happen
+
+             // Check if the other body is the car chassis
+             if (otherBody === carPhysicsBody) {
+                 const relativeVelocity = event.contact.getImpactVelocityAlongNormal();
+
+                 // Apply impulse only if velocity is significant
+                 if (Math.abs(relativeVelocity) > 2) { // Lower threshold for cartoony effect
+                     // Apply impulse to the specific part hit
+                     const impulse = new CANNON.Vec3();
+                     // Calculate impulse direction away from car
+                     const carPos = carPhysicsBody.position;
+                     const partPos = collidedPartBody.position;
+                     impulse.copy(partPos).vsub(carPos).normalize();
+                     impulse.scale(Math.abs(relativeVelocity) * collidedPartBody.mass * 5); // Scale impulse
+
+                     const contactPoint = new CANNON.Vec3();
+                     event.contact.ri.vadd(collidedPartBody.position, contactPoint); // Get world contact point on the ragdoll part
+
+                     collidedPartBody.applyImpulse(impulse, contactPoint);
+
+                     // Optional: Make parts slightly less stable after hit
+                     collidedPartBody.angularDamping = 0.5;
+                     collidedPartBody.linearDamping = 0.5;
+                 }
+             }
+         }
 
 
-        // Keyboard controls
+        // --- Keyboard Controls ---
         const keys = {};
-        document.addEventListener('keydown', (event) => {
-            keys[event.key] = true;
-        });
-        document.addEventListener('keyup', (event) => {
-            keys[event.key] = false;
-        });
+        document.addEventListener('keydown', (event) => keys[event.key.toLowerCase()] = true); // Use lowercase keys
+        document.addEventListener('keyup', (event) => keys[event.key.toLowerCase()] = false);
 
-        function updatePhysics() {
-            // Apply engine force
-            if (keys['w'] || keys['ArrowUp']) {
-                engineForce = carProperties.acceleration;
-                isReversing = false;
-            } else if (keys['s'] || keys['ArrowDown']) {
-                engineForce = -carProperties.acceleration / 2; // Reduced reverse acceleration
-                isReversing = true;
+        // --- Disclaimer Timeout ---
+        setTimeout(() => {
+            const disclaimerDiv = document.getElementById('disclaimer');
+            if (disclaimerDiv) {
+                disclaimerDiv.style.display = 'none';
+            }
+        }, 10000); // 10 seconds
+
+        // --- Game Loop ---
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const deltaTime = clock.getDelta();
+
+            resizeRendererToDisplaySize(renderer);
+
+            // --- Vehicle Control ---
+            const maxSteerVal = carProperties.maxSteeringAngle;
+            const maxForce = carProperties.acceleration * carProperties.mass; // Adjust force based on mass
+            const brakeForce = carProperties.brakingForce * carProperties.mass; // Adjust brake force
+
+            engineForce = 0;
+            let currentSteering = 0;
+            let applyBrake = false;
+
+            if (keys['w'] || keys['arrowup']) {
+                engineForce = maxForce;
+            }
+            if (keys['s'] || keys['arrowdown']) {
+                engineForce = -maxForce / 2; // Reverse force
+            }
+
+            if (keys['a'] || keys['arrowleft']) {
+                currentSteering = maxSteerVal;
+            }
+            if (keys['d'] || keys['arrowright']) {
+                currentSteering = -maxSteerVal;
+            }
+
+            if (keys[' '] || keys['shift']) { // Space or Shift for brakes
+                applyBrake = true;
+            }
+
+            // Apply inputs to vehicle simulation
+            vehicle.setSteeringValue(currentSteering, 0); // Front-left wheel
+            vehicle.setSteeringValue(currentSteering, 1); // Front-right wheel
+
+            vehicle.applyEngineForce(engineForce, 2); // Rear-left wheel
+            vehicle.applyEngineForce(engineForce, 3); // Rear-right wheel
+
+            // Apply brakes
+            if (applyBrake) {
+                vehicle.setBrake(brakeForce, 0);
+                vehicle.setBrake(brakeForce, 1);
+                vehicle.setBrake(brakeForce, 2);
+                vehicle.setBrake(brakeForce, 3);
             } else {
-                engineForce = 0;
+                vehicle.setBrake(0, 0);
+                vehicle.setBrake(0, 1);
+                vehicle.setBrake(0, 2);
+                vehicle.setBrake(0, 3);
             }
 
-            // Apply braking
-            if (keys[' '] || keys['Shift']) {
-                if (velocity.length() > 0.5) { // Only brake if moving
-                    carBody.applyForce(new CANNON.Vec3(0, 0, -velocity.x * carProperties.brakingForce), carBody.position);
-                    carBody.applyForce(new CANNON.Vec3(0, 0, -velocity.z * carProperties.brakingForce), carBody.position);
-                    engineForce = 0; // Cancel engine force when braking
-                }
+            // --- Procedural Road Generation ---
+            const carZ = carPhysicsBody.position.z;
+
+            // Generate forward
+            if (carZ > furthestPositiveZ - generationThreshold) {
+                const nextZ = furthestPositiveZ + roadSegmentLength / 2;
+                createRoad(0, nextZ, roadWidth, roadSegmentLength, true, roadMaterial);
+                furthestPositiveZ += roadSegmentLength;
+                console.log("Generated road segment forward at Z:", nextZ);
             }
 
-            // Apply steering
-            if (keys['a'] || keys['ArrowLeft']) {
-                steeringAngle = Math.min(steeringAngle + carProperties.steeringSensitivity, carProperties.maxSteeringAngle);
-            } else if (keys['d'] || keys['ArrowRight']) {
-                steeringAngle = Math.max(steeringAngle - carProperties.steeringSensitivity, -carProperties.maxSteeringAngle);
-            } else {
-                steeringAngle = 0;
+            // Generate backward
+            if (carZ < furthestNegativeZ + generationThreshold) {
+                const nextZ = furthestNegativeZ - roadSegmentLength / 2;
+                createRoad(0, nextZ, roadWidth, roadSegmentLength, true, roadMaterial);
+                furthestNegativeZ -= roadSegmentLength;
+                 console.log("Generated road segment backward at Z:", nextZ);
             }
 
-            const currentSpeed = carBody.velocity.length();
-             // Apply speed limits
-            if (engineForce > 0 && currentSpeed > carProperties.maxSpeed) {
-                engineForce = 0; // Cancel forward acceleration
-            }
-            if (engineForce < 0 && currentSpeed > Math.abs(carProperties.maxReverseSpeed)) {
-                engineForce = 0;
+             // --- Physics Update ---
+            world.step(1 / 60, deltaTime, 3); // Use fixed timestep, pass deltaTime, use more substeps
+
+            // --- Update Visuals ---
+            // Update car chassis
+            carChassisMesh.position.copy(carPhysicsBody.position);
+            carChassisMesh.quaternion.copy(carPhysicsBody.quaternion);
+
+            // Update wheels using vehicle simulation data
+            for (let i = 0; i < vehicle.wheelInfos.length; i++) {
+                vehicle.updateWheelTransform(i);
+                const transform = vehicle.wheelInfos[i].worldTransform;
+                wheelMeshes[i].position.copy(transform.position);
+                wheelMeshes[i].quaternion.copy(transform.quaternion);
             }
 
-            wheels.forEach(wheel => {
-                wheel.steering = steeringAngle;
-                wheel.engineForce = engineForce;
+            // Update ragdolls
+            ragdolls.forEach(ragdoll => {
+                ragdoll.parts.forEach(part => {
+                    part.mesh.position.copy(part.body.position);
+                    part.mesh.quaternion.copy(part.body.quaternion);
+                });
             });
 
-            // Apply forces to the wheels (simplified)
-            const frontWheelForce = new CANNON.Vec3(
-                Math.cos(wheels[0].steering) * wheels[0].engineForce,
-                0,
-                Math.sin(wheels[0].steering) * wheels[0].engineForce
-            );
-            wheels[0].body.applyForce(frontWheelForce, wheels[0].body.position);
+            // Update camera
+            updateCameraPosition();
 
-            const frontWheelForce2 = new CANNON.Vec3(
-                Math.cos(wheels[1].steering) * wheels[1].engineForce,
-                0,
-                Math.sin(wheels[1].steering) * wheels[1].engineForce
-            );
-            wheels[1].body.applyForce(frontWheelForce2, wheels[1].body.position);
-
-            const rearWheelForce = new CANNON.Vec3(
-                Math.cos(wheels[2].steering) * wheels[2].engineForce,
-                0,
-                Math.sin(wheels[2].steering) * wheels[2].engineForce
-            );
-            wheels[2].body.applyForce(rearWheelForce, wheels[2].body.position);
-
-            const rearWheelForce2 = new CANNON.Vec3(
-                Math.cos(wheels[3].steering) * wheels[3].engineForce,
-                0,
-                Math.sin(wheels[3].steering) * wheels[3].engineForce
-            );
-            wheels[3].body.applyForce(rearWheelForce2, wheels[3].body.position);
-
-
-            world.step(1 / 60); // Fixed time step
+            renderer.render(scene, camera);
         }
-
-
-        function updateCarPosition() {
-             // Update car mesh position
-            carChassisMesh.position.copy(carBody.position);
-            carChassisMesh.quaternion.copy(carBody.quaternion);
-
-            // Update wheel positions
-            wheels.forEach((wheel, index) => {
-                carWheelMeshes[index].position.copy(wheel.body.position);
-                carWheelMeshes[index].quaternion.copy(wheel.body.quaternion);
-            });
-
-            // Get car velocity
-            velocity.copy(carBody.velocity);
-        }
-
 
         function updateCameraPosition() {
-            const targetPosition = new THREE.Vector3();
-            targetPosition.copy(carBody.position);
-            targetPosition.y = carBody.position.y + 3; // Camera height
-            targetPosition.z = carBody.position.z - 10; // Camera distance behind
+            const carPosition = carPhysicsBody.position;
+            const carQuaternion = carPhysicsBody.quaternion;
 
-            const cameraSpeed = 0.1; // Smooth camera movement
-            camera.position.lerp(targetPosition, cameraSpeed);
-            camera.lookAt(carBody.position);
+            // Calculate offset relative to car's orientation
+            const offset = new THREE.Vector3(0, 5, -12); // Base offset (behind and above)
+            offset.applyQuaternion(carQuaternion); // Rotate offset by car's rotation
+            offset.add(carPosition); // Add rotated offset to car's position
+
+            // Smoothly move camera towards the target position
+            camera.position.lerp(offset, 0.1); // Adjust lerp factor for smoothness
+
+            // Make camera look slightly ahead of the car
+            const lookAtTarget = new THREE.Vector3(0, 0, 5); // Point 5 units in front of car
+            lookAtTarget.applyQuaternion(carQuaternion);
+            lookAtTarget.add(carPosition);
+
+            camera.lookAt(lookAtTarget);
         }
-
 
         function resizeRendererToDisplaySize(renderer) {
             const canvas = renderer.domElement;
@@ -602,18 +573,7 @@
             return needResize;
         }
 
-        function animate() {
-            requestAnimationFrame(animate);
-
-            resizeRendererToDisplaySize(renderer);
-
-            updatePhysics();
-            updateCarPosition();
-            updateCameraPosition();
-
-            renderer.render(scene, camera);
-        }
-
+        // --- Start ---
         resizeRendererToDisplaySize(renderer);
         animate();
     </script>
